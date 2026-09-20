@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -924,6 +925,89 @@ func TestVersionIsReportedByBothSpellings(t *testing.T) {
 				t.Errorf("%v output %q is missing %q", args, strings.TrimSpace(stdout), want)
 			}
 		}
+	}
+}
+
+// TestResolveBuildPrefersLdflagsThenEmbeddedInfo pins the precedence, because
+// the failure it guards against is silent: a release binary that reports its
+// tag from the wrong source still prints something plausible.
+func TestResolveBuildPrefersLdflagsThenEmbeddedInfo(t *testing.T) {
+	settings := func(kv ...string) []debug.BuildSetting {
+		out := make([]debug.BuildSetting, 0, len(kv)/2)
+		for i := 0; i < len(kv); i += 2 {
+			out = append(out, debug.BuildSetting{Key: kv[i], Value: kv[i+1]})
+		}
+		return out
+	}
+
+	tests := []struct {
+		name                          string
+		version, commit, date         string
+		bi                            *debug.BuildInfo
+		ok                            bool
+		wantVersion, wantCommit, want string
+	}{{
+		name:    "ldflags win over embedded info",
+		version: "0.1.1", commit: "abc1234", date: "2026-09-20T00:00:00Z",
+		bi: &debug.BuildInfo{
+			Main:     debug.Module{Version: "v9.9.9"},
+			Settings: settings("vcs.revision", "ffffffffffffffffffffffffffffffffffffffff", "vcs.time", "2000-01-01T00:00:00Z"),
+		},
+		ok:          true,
+		wantVersion: "0.1.1", wantCommit: "abc1234", want: "2026-09-20T00:00:00Z",
+	}, {
+		// The `go install path@v0.1.1` shape: a proxy build carries the module
+		// version and no vcs.* settings whatsoever.
+		name:    "go install recovers the tag and leaves the commit alone",
+		version: "dev", commit: "none", date: "unknown",
+		bi:          &debug.BuildInfo{Main: debug.Module{Version: "v0.1.1"}},
+		ok:          true,
+		wantVersion: "0.1.1", wantCommit: "none", want: "unknown",
+	}, {
+		// The `go build` shape: vcs.* present, and a synthesised pseudo-version
+		// that must not be reported, because it names an unreleased 0.1.2.
+		name:    "go build recovers the commit and rejects the pseudo-version",
+		version: "dev", commit: "none", date: "unknown",
+		bi: &debug.BuildInfo{
+			Main:     debug.Module{Version: "v0.1.2-0.20260920170255-3e60addac030"},
+			Settings: settings("vcs.revision", "0be0fc9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vcs.time", "2026-09-19T12:00:00Z", "vcs.modified", "false"),
+		},
+		ok:          true,
+		wantVersion: "dev", wantCommit: "0be0fc9", want: "2026-09-19T12:00:00Z",
+	}, {
+		// Older toolchains used this placeholder instead of a pseudo-version.
+		name:    "the devel placeholder is rejected too",
+		version: "dev", commit: "none", date: "unknown",
+		bi:          &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}},
+		ok:          true,
+		wantVersion: "dev", wantCommit: "none", want: "unknown",
+	}, {
+		// A real tag on a modified tree. The tag is true of the commit and not
+		// of the binary, so reporting it bare would be the misleading case.
+		name:    "a tagged build from a dirty tree reports neither a bare tag nor a clean commit",
+		version: "dev", commit: "none", date: "unknown",
+		bi: &debug.BuildInfo{
+			Main:     debug.Module{Version: "v0.1.1+dirty"},
+			Settings: settings("vcs.revision", "0be0fc9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vcs.modified", "true"),
+		},
+		ok:          true,
+		wantVersion: "dev", wantCommit: "0be0fc9-dirty", want: "unknown",
+	}, {
+		name:    "no build info at all leaves every default in place",
+		version: "dev", commit: "none", date: "unknown",
+		bi:          nil,
+		ok:          false,
+		wantVersion: "dev", wantCommit: "none", want: "unknown",
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			version, commit, date := resolveBuild(tc.version, tc.commit, tc.date, tc.bi, tc.ok)
+			if version != tc.wantVersion || commit != tc.wantCommit || date != tc.want {
+				t.Errorf("resolveBuild = (%q, %q, %q), want (%q, %q, %q)",
+					version, commit, date, tc.wantVersion, tc.wantCommit, tc.want)
+			}
+		})
 	}
 }
 

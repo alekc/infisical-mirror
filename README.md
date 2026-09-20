@@ -59,9 +59,11 @@ not enable the service**: the shipped config carries placeholder project slugs
 and `dryRun: true`, so it fails at startup until you fill it in. See
 [Deploying it](#deploying-it) for the three steps that follow.
 
-Or from source, which needs Go 1.27 or newer. Note that a `go install` build
-carries no link-time flags, so it reports `dev` rather than the tag when you
-run `version`; the release archives and the container image are both stamped.
+Or from source, which needs Go 1.27 or newer. A `go install` build carries no
+link-time flags, so `version` recovers what it can from the build info the
+toolchain embeds: the tag when you install one, and the commit when you build
+from a checkout. A build from a modified tree says so, and reports `dev` rather
+than a version that looks like a release nobody can fetch.
 
 ```sh
 go install github.com/alekc/infisical-mirror/cmd/infisical-mirror@latest
