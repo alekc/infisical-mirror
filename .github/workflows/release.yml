@@ -13,13 +13,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # goreleaser builds the changelog from the git history, so a shallow
           # clone gives it one commit to work with and an empty changelog.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27.1"
           cache: true
@@ -27,15 +27,15 @@ jobs:
       # Needed for the two per-architecture image builds. No QEMU: the Go
       # binary is cross-compiled and only copied in, so both images build
       # natively on an amd64 runner.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
