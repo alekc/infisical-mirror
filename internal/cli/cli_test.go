@@ -956,6 +956,19 @@ func TestResolveBuildPrefersLdflagsThenEmbeddedInfo(t *testing.T) {
 		ok:          true,
 		wantVersion: "0.1.1", wantCommit: "abc1234", want: "2026-09-20T00:00:00Z",
 	}, {
+		// `make build` on a modified tree: the commit arrives through ldflags
+		// and is still not what the binary was built from, so it is marked.
+		// The Makefile's own VERSION carries git describe --dirty for the same
+		// reason, which is why this applies to a linked commit rather than not.
+		name:    "a linked commit from a dirty tree is marked too",
+		version: "0.1.1", commit: "abc1234", date: "2026-09-20T00:00:00Z",
+		bi: &debug.BuildInfo{
+			Main:     debug.Module{Version: "(devel)"},
+			Settings: settings("vcs.revision", "abc1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vcs.modified", "true"),
+		},
+		ok:          true,
+		wantVersion: "0.1.1", wantCommit: "abc1234-dirty", want: "2026-09-20T00:00:00Z",
+	}, {
 		// The `go install path@v0.1.1` shape: a proxy build carries the module
 		// version and no vcs.* settings whatsoever.
 		name:    "go install recovers the tag and leaves the commit alone",

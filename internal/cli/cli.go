@@ -78,8 +78,9 @@ func resolveBuild(version, commit, date string, bi *debug.BuildInfo, ok bool) (s
 	}
 
 	// A binary built from a dirty tree is not the commit it names, and saying
-	// so is the whole point of reporting a commit at all. Only marked on the
-	// recovered path: ldflags builds come from a release runner's clean clone.
+	// so is the whole point of reporting a commit at all. Deliberately applied
+	// to a linked commit too: `make build` on a modified tree sets one through
+	// ldflags, and its VERSION already carries git describe --dirty.
 	if modified && commit != "none" && !strings.HasSuffix(commit, "-dirty") {
 		commit += "-dirty"
 	}
