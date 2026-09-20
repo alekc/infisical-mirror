@@ -1,0 +1,62 @@
+# Default config installed by the infisical-mirror package. It does not work
+# as shipped, deliberately: the project slugs are placeholders, so the service
+# fails at startup rather than mirroring something nobody asked it to. Edit
+# it, fill in /etc/infisical-mirror/env, then enable the service.
+
+# No credential belongs in this file, the auth blocks only name environment
+# variables. Full reference, with every option annotated, is in
+# /usr/share/doc/infisical-mirror/examples/config.yaml
+
+instances:
+  cloud:
+    url: https://app.infisical.com
+    auth:
+      universalAuth:
+        clientIdEnv: CLOUD_CLIENT_ID
+        clientSecretEnv: CLOUD_CLIENT_SECRET
+
+  selfhosted:
+    url: https://secrets.example.com
+    auth:
+      universalAuth:
+        clientIdEnv: SELFHOSTED_CLIENT_ID
+        clientSecretEnv: SELFHOSTED_CLIENT_SECRET
+
+state:
+  backend: file
+  # Matches StateDirectory= in the unit, which systemd creates at 0700 owned
+  # by the dynamic user. Moving it elsewhere means the service cannot write.
+  file:
+    path: /var/lib/infisical-mirror/state.json
+
+daemon:
+  interval: 15m
+
+metrics:
+  # Served on GET /metrics alongside GET /healthz under --daemon. Loopback
+  # only: widen it deliberately, the endpoint is unauthenticated.
+  listen: 127.0.0.1:9090
+
+defaults:
+  # The package default is to report, never write. Watch a few passes, confirm
+  # the plan is what you expect, then set this to false. `plan` is available
+  # as a command for the same purpose without touching the service.
+  dryRun: true
+  conflict: newest-wins
+  delete: ignore
+  maxChangeRatio: 0.25
+  recursive: true
+
+rules:
+  - name: example
+    mode: a-to-b
+    a:
+      instance: cloud
+      project: REPLACE-ME-cloud-project # the slug from the URL, not the id
+      path: /
+    b:
+      instance: selfhosted
+      project: REPLACE-ME-selfhosted-project
+      path: /
+    envMap:
+      prod: prod

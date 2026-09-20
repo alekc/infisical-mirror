@@ -1,0 +1,17 @@
+# Credentials for infisical-mirror, read by systemd as an EnvironmentFile.
+# Installed at 0640 root:root, and worth keeping that way: this is the only
+# file in the package expected to hold secrets.
+
+# The names on the left must match the *Env keys in config.yaml. systemd takes
+# values literally, so no quoting, no expansion, no trailing comments.
+
+CLOUD_CLIENT_ID=
+CLOUD_CLIENT_SECRET=
+
+SELFHOSTED_CLIENT_ID=
+SELFHOSTED_CLIENT_SECRET=
+
+# Optional. Names the variable holding the state hashing salt, if config.yaml
+# sets state.saltEnv. Left unset, the store generates one on first use and
+# keeps it inside the state file. See the Configuration section of the README.
+# MIRROR_STATE_SALT=

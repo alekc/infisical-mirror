@@ -45,6 +45,20 @@ Container image, `linux/amd64` and `linux/arm64`:
 docker pull ghcr.io/alekc/infisical-mirror:0.1.0
 ```
 
+Debian and Ubuntu, from the `.deb` attached to each release (amd64 and arm64,
+from v0.1.1 onward):
+
+```sh
+VERSION=0.1.1
+curl -fsSLO "https://github.com/alekc/infisical-mirror/releases/download/v${VERSION}/infisical-mirror_${VERSION}_linux_amd64.deb"
+sudo dpkg -i "infisical-mirror_${VERSION}_linux_amd64.deb"
+```
+
+The package brings a systemd unit and a default config, and **deliberately does
+not enable the service**: the shipped config carries placeholder project slugs
+and `dryRun: true`, so it fails at startup until you fill it in. See
+[Deploying it](#deploying-it) for the three steps that follow.
+
 Or from source, which needs Go 1.27 or newer. Note that a `go install` build
 carries no link-time flags, so it reports `dev` rather than the tag when you
 run `version`; the release archives and the container image are both stamped.
@@ -382,7 +396,7 @@ rather than being skipped.
 
 ## Deploying it
 
-Two shapes, one binary.
+Three shapes, one binary.
 
 **One-shot** is the CronJob shape: run it, it does one pass and exits. With
 `metrics.textfile` set it writes a Prometheus textfile for the node_exporter
@@ -428,6 +442,28 @@ scrape target rather than a textfile.
 Either way **the state file has to outlive the container**. Mount a volume at
 `/var/lib/infisical-mirror`; without one, every start is a first run and every
 key looks new on both sides.
+
+**The Debian package** is the third shape, and it is `--daemon` on a host
+rather than in a cluster. `dpkg -i` installs the unit without enabling it, so
+bringing it up is three deliberate steps:
+
+```sh
+sudoedit /etc/infisical-mirror/config.yaml   # replace the REPLACE-ME slugs
+sudoedit /etc/infisical-mirror/env           # the four credential variables
+sudo systemctl enable --now infisical-mirror
+```
+
+It will run in dry-run until you clear `defaults.dryRun` in the config, which
+is the point: watch a few passes with `journalctl -u infisical-mirror` first.
+Both files under `/etc/infisical-mirror` are conffiles, so an upgrade never
+overwrites them, and `/etc/infisical-mirror/env` is the one installed at 0640
+because it is the one holding credentials.
+
+The unit runs under `DynamicUser=yes` with `StateDirectory=infisical-mirror`,
+so systemd owns the account and the state directory and there is no service
+user to create or clean up. One consequence worth knowing: `apt purge` removes
+`/var/lib/infisical-mirror` along with the config, so the next install starts
+with no record of what was reconciled. A plain `apt remove` keeps both.
 
 ## How a key is decided
 

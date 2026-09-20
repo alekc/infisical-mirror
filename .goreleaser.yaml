@@ -45,6 +45,65 @@ archives:
     files:
       - examples/config.yaml
 
+# Debian packages, one per linux arch. nfpm skips the darwin builds on its
+# own, so the `ids` above cover both and only the linux ones produce a .deb.
+nfpms:
+  - id: infisical-mirror
+    ids:
+      - infisical-mirror
+    package_name: infisical-mirror
+    vendor: alekc
+    homepage: https://github.com/alekc/infisical-mirror
+    maintainer: Alexander Chernov <alexander@chernov.it>
+    description: |-
+      Bidirectional mirror between two Infisical instances.
+      Walks the folder tree recursively, across several environments, one way
+      or both ways per rule. Installs disabled with a dry-run default config.
+    license: MIT
+    section: utils
+    formats:
+      - deb
+    bindir: /usr/bin
+    contents:
+      # noreplace on both: an upgrade must never overwrite a config someone
+      # has filled in, and the env file is the one holding the credentials.
+      - src: packaging/deb/config.yaml
+        dst: /etc/infisical-mirror/config.yaml
+        type: "config|noreplace"
+        file_info:
+          mode: 0644
+      - src: packaging/deb/env
+        dst: /etc/infisical-mirror/env
+        type: "config|noreplace"
+        file_info:
+          mode: 0640
+      # /usr/lib, not /lib: every target with systemd has merged /usr, and
+      # lintian rejects the aliased path outright.
+      - src: packaging/systemd/infisical-mirror.service
+        dst: /usr/lib/systemd/system/infisical-mirror.service
+        file_info:
+          mode: 0644
+      - src: LICENSE
+        dst: /usr/share/doc/infisical-mirror/copyright
+      - src: examples/config.yaml
+        dst: /usr/share/doc/infisical-mirror/examples/config.yaml
+      - src: examples/config-minimal.yaml
+        dst: /usr/share/doc/infisical-mirror/examples/config-minimal.yaml
+    scripts:
+      postinstall: packaging/deb/postinstall.sh
+      preremove: packaging/deb/preremove.sh
+      postremove: packaging/deb/postremove.sh
+    deb:
+      # Each of these is deliberate. The first two are inherent to a Go binary
+      # released by goreleaser; the last three are choices made above, and the
+      # 0640 one is load-bearing: /etc/infisical-mirror/env holds credentials.
+      lintian_overrides:
+        - statically-linked-binary
+        - changelog-file-missing-in-native-package
+        - maintainer-script-calls-systemctl
+        - no-manual-page
+        - non-standard-file-perm
+
 checksum:
   name_template: checksums.txt
 

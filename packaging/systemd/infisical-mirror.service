@@ -1,0 +1,57 @@
+[Unit]
+Description=Bidirectional mirror between two Infisical instances
+Documentation=https://github.com/alekc/infisical-mirror
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# --daemon makes the process own its own cadence (defaults to 15m) and serve
+# /metrics, so there is no timer unit here. For a one-shot run instead, drop
+# --daemon and drive it from a .timer.
+ExecStart=/usr/bin/infisical-mirror apply --daemon --config /etc/infisical-mirror/config.yaml
+
+# Credentials only. The package ships this at 0640 root:root and it is the one
+# file here that is expected to hold secrets.
+EnvironmentFile=/etc/infisical-mirror/env
+
+Restart=on-failure
+RestartSec=30s
+
+# systemd creates the account and /var/lib/infisical-mirror with the right
+# ownership, so no maintainer script does user management and a purge leaves
+# nothing behind. The state file is the only thing this needs to write.
+DynamicUser=yes
+StateDirectory=infisical-mirror
+StateDirectoryMode=0700
+
+# Nothing here needs privileges, a writable filesystem beyond the state
+# directory, or any address family other than IP. A compromised mirror holds
+# every secret it moves, so the blast radius is worth the extra lines.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
