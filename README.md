@@ -10,8 +10,10 @@ folder before a `PushSecret` can see it
 ([external-secrets#6873](https://github.com/external-secrets/external-secrets/issues/6873)).
 This fills that gap.
 
-**Status: in development.** It can write now, and has had limited exposure to
-real instances. Start with `plan`, then `dryRun: true`, then widen.
+**Status: v0.1.0, the first tagged release.** It has been mirroring one real
+pair of instances in `apply` mode since 2026-09-20, and that is the whole of
+its production record. The config surface may still change before 1.0. Start
+with `plan`, then `dryRun: true`, then widen.
 
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -43,7 +45,9 @@ Container image, `linux/amd64` and `linux/arm64`:
 docker pull ghcr.io/alekc/infisical-mirror:0.1.0
 ```
 
-Or from source, which needs Go 1.27 or newer:
+Or from source, which needs Go 1.27 or newer. Note that a `go install` build
+carries no link-time flags, so it reports `dev` rather than the tag when you
+run `version`; the release archives and the container image are both stamped.
 
 ```sh
 go install github.com/alekc/infisical-mirror/cmd/infisical-mirror@latest
