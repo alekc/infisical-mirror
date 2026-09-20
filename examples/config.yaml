@@ -1,0 +1,118 @@
+# infisical-mirror example configuration, annotated. For the smallest config
+# that does something useful, see config-minimal.yaml next to this file; for
+# the reasoning behind the guards and the state file, see ../docs/design.md.
+#
+# Credentials are never read from this file: the auth block names environment
+# variables, and the process reads them at startup.
+
+instances:
+  cloud:
+    url: https://app.infisical.com
+    auth:
+      universalAuth:
+        clientIdEnv: CLOUD_CLIENT_ID
+        clientSecretEnv: CLOUD_CLIENT_SECRET
+
+  selfhosted:
+    url: https://secret.example.com
+    auth:
+      # Either a machine identity, as above, or an access token that something
+      # else already obtained. Exactly one of the two.
+      token:
+        tokenEnv: SELFHOSTED_TOKEN
+
+state:
+  backend: file
+  # Optional. Names the environment variable holding the hashing salt; the
+  # value never appears here. Left unset, the store generates a salt on first
+  # use and keeps it inside the state file, which is simpler but leaves the
+  # file self-contained: whoever holds it can test a guessed value against a
+  # stored hash. Naming a variable splits the two.
+  #
+  # The salt is not recoverable from the state file, and changing it makes
+  # every recorded hash meaningless, so the store refuses to open a file
+  # written under a different one rather than silently rehashing.
+  saltEnv: MIRROR_STATE_SALT
+  file:
+    path: /var/lib/infisical-mirror/state.json
+
+# Only read under --daemon. Without the flag the process runs one pass and
+# exits, which is the CronJob shape and needs no cadence.
+daemon:
+  # A unit is mandatory: a bare 15 would be fifteen nanoseconds, so it is
+  # refused rather than accepted as something nobody meant. Minimum 1m,
+  # default 15m. The interval is measured from the end of one pass, so a pass
+  # that runs long delays the next one instead of overlapping it.
+  interval: 15m
+
+metrics:
+  # Served on GET /metrics under --daemon, alongside GET /healthz. Ignored by a
+  # one-shot run, which has nobody to scrape it.
+  listen: :9090
+  # Written by a one-shot run, for the node_exporter textfile collector to pick
+  # up; ignored under --daemon. Unset means a one-shot run emits no metrics at
+  # all. Must be absolute and end in .prom: the collector reads only *.prom,
+  # and silently ignores anything else in the directory.
+  textfile: /var/lib/node_exporter/textfile/infisical-mirror.prom
+
+# Applied to any rule that does not set the same field.
+defaults:
+  conflict: newest-wins # a-wins | b-wins | newest-wins | fail
+  delete: ignore # ignore | propagate
+  maxChangeRatio: 0.25 # abort a rule that wants to change more than this
+  recursive: true
+  dryRun: false # --dry-run forces this on, and never off
+
+rules:
+  # The whole tree, both ways, prod to prod and dev to dev.
+  #
+  # `project` is the project slug, the one in the Infisical URL, not the project
+  # id. It is resolved to an id once per run, which is also when the environment
+  # names below are checked against the ones the project actually has.
+  - name: home-cluster
+    mode: bidirectional # a-to-b | b-to-a | bidirectional
+    a:
+      instance: cloud
+      project: example-cloud-project
+      path: /
+    b:
+      instance: selfhosted
+      project: example-selfhosted-project
+      path: /
+    envMap:
+      prod: prod
+      dev: dev
+    # Globs against the rule-relative folder path. An empty (or absent)
+    # include means every folder under the root; exclude always wins.
+    #
+    # include:
+    #   - /apps/**
+    exclude:
+      - /scratch/**
+      # Handed to the arr-stack rule below. A trailing /** covers the folder
+      # itself as well as everything under it. Without this line the config is
+      # rejected: two rules writing one folder fight, and the loser is a secret.
+      - /apps/arr-stack/**
+
+  # One folder, landing on a different folder on the far side, one way only,
+  # and without descending into subfolders. The dev environment of this rule
+  # lives somewhere else again, so it overrides both roots.
+  - name: arr-stack
+    mode: a-to-b
+    a:
+      instance: cloud
+      project: example-cloud-project
+      path: /arr-stack
+    b:
+      instance: selfhosted
+      project: example-selfhosted-project
+      path: /apps/arr-stack
+    recursive: false
+    # Still settling in: report what it would do, change nothing.
+    dryRun: true
+    envMap:
+      prod: prod
+      dev:
+        env: staging
+        aPath: /arr-stack-dev
+        bPath: /apps/arr-stack-staging

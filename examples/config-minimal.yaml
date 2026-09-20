@@ -1,0 +1,39 @@
+# The smallest config that does something useful: one folder tree, one
+# environment, one way. Everything not set here takes its default.
+#
+# No credential appears in this file. The auth block names environment
+# variables and the process reads them at startup.
+
+instances:
+  cloud:
+    url: https://app.infisical.com
+    auth:
+      universalAuth:
+        clientIdEnv: CLOUD_CLIENT_ID
+        clientSecretEnv: CLOUD_CLIENT_SECRET
+
+  selfhosted:
+    url: https://secrets.example.com
+    auth:
+      universalAuth:
+        clientIdEnv: SELFHOSTED_CLIENT_ID
+        clientSecretEnv: SELFHOSTED_CLIENT_SECRET
+
+state:
+  backend: file
+  file:
+    path: /var/lib/infisical-mirror/state.json
+
+rules:
+  - name: home-cluster
+    mode: a-to-b
+    a:
+      instance: cloud
+      project: my-cloud-project # the slug from the URL, not the id
+      path: /
+    b:
+      instance: selfhosted
+      project: my-selfhosted-project
+      path: /
+    envMap:
+      prod: prod

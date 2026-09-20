@@ -1,0 +1,76 @@
+version: "2"
+
+# This tool reads and writes secrets. The linter set below is picked for that
+# rather than for style: the checks that matter are the ones that catch a value
+# reaching a log, an error being dropped on a path that writes, and a request
+# going out without a context or a deadline.
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    # A response body left unclosed leaks a connection; one left undrained
+    # silently disables keep-alive, which is a real cost per call here.
+    - bodyclose
+    # Every outbound call must carry a context, or a cancelled run keeps
+    # talking to both instances after the operator has given up.
+    - noctx
+    # errors.Is / errors.As rather than == and type assertions. The retry
+    # classification and the AuthError barrier are both built on wrapping.
+    - errorlint
+    # Secrets, file permissions, and the crypto choices in internal/state.
+    - gosec
+    # An unchecked type assertion on an any decoded from a server's JSON is a
+    # panic waiting for a schema change.
+    - forcetypeassert
+    - unconvert
+    - wastedassign
+    - nilerr
+    - misspell
+    - revive
+
+  settings:
+    gosec:
+      excludes:
+        # File permissions are set deliberately and asserted in tests: the
+        # state file is 0600 and its directory 0700.
+        - G306
+        # "File inclusion via variable" is the entire job: the config path and
+        # the state path are operator input by design, and both are opened, not
+        # served. There is no variant of this tool where they are constants.
+        - G304
+    staticcheck:
+      checks:
+        - all
+        # Quickfix suggestions, not defects: an explicit switch with a case per
+        # branch reads better here than a tagged one, and De Morgan's law
+        # applied to a filter condition makes it harder to check against the
+        # rule it implements, not easier.
+        - -QF1001
+        - -QF1002
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    misspell:
+      locale: UK
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Test code makes assertions about failures, so an error deliberately
+      # ignored in a fixture is not the same defect as one ignored in the
+      # client.
+      - path: _test\.go
+        linters:
+          - gosec
+          - forcetypeassert
+          - noctx
+
+formatters:
+  enable:
+    - gofmt

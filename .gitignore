@@ -1,0 +1,6 @@
+/infisical-mirror
+/bin/
+/dist/
+coverage.out
+*.local.yaml
+.envrc

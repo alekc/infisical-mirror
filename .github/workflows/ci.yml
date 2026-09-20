@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          # setup-go forces GOTOOLCHAIN=local, so it ignores a `toolchain`
+          # directive in go.mod and builds with whatever it installed. Pinning
+          # the version here is what keeps CI on the same compiler as a local
+          # build.
+          go-version: "1.27.1"
+          cache: true
+
+      - name: gofmt
+        run: make fmt-check
+
+      - name: vet
+        run: make vet
+
+      # The race detector is not optional: one client is shared across the
+      # goroutines that read both instances, and its folder and project caches
+      # are the part most likely to be got wrong.
+      - name: test
+        run: make test-race
+
+      # A version string nobody checks is one nobody notices is wrong. This
+      # fails if the ldflags stop pointing at variables that exist.
+      - name: version ldflags
+        run: make version-check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+
+  # A release that first discovers its config is invalid is one that fails
+  # after the tag is already pushed, which is the expensive moment to find out.
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check

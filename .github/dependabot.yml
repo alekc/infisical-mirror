@@ -1,0 +1,46 @@
+# Three ecosystems, because a Go binary in a distroless image has three places
+# a version can go stale: the modules it links, the actions that build it, and
+# the base image it is copied into.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # One PR for the patch and minor bumps. Reviewing them one at a time
+      # costs a full CI run each to learn the same thing.
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The Dockerfile pins gcr.io/distroless/static:nonroot, which is a moving
+  # tag, so this catches a digest change rather than a version bump.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope

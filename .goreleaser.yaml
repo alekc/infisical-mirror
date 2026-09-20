@@ -1,0 +1,93 @@
+# Release build. The three ldflags below are the same three the Makefile sets,
+# so a release binary and a locally built one report the same shape and a
+# `version` output can be traced back to a commit either way.
+version: 2
+
+project_name: infisical-mirror
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: infisical-mirror
+    main: ./cmd/infisical-mirror
+    binary: infisical-mirror
+    env:
+      # The image below has no libc, and a binary that dlopens NSS at runtime
+      # would fail its first DNS lookup inside the container rather than at
+      # build time. Nothing here needs cgo.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/alekc/infisical-mirror/internal/cli.Version={{ .Version }}
+      - -X github.com/alekc/infisical-mirror/internal/cli.Commit={{ .ShortCommit }}
+      - -X github.com/alekc/infisical-mirror/internal/cli.BuildDate={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: infisical-mirror
+    ids:
+      - infisical-mirror
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - examples/config.yaml
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  # `use: github` calls the compare API, which 404s for a tag that has not been
+  # pushed yet, so a local --snapshot build fails on it. The local git history
+  # is available in both cases.
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# One multi-platform image, built through buildx. The older `dockers` plus
+# `docker_manifests` pair does the same job and is deprecated as of v2.12; this
+# is a new repository, so there is nothing to migrate later by starting here.
+#
+# No QEMU is involved: Go cross-compiles the binary and the Dockerfile only
+# copies it in, so neither platform runs a foreign instruction at build time.
+dockers_v2:
+  - images:
+      - ghcr.io/alekc/infisical-mirror
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    dockerfile: Dockerfile
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Bidirectional mirror between two Infisical instances"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.licenses: "MIT"
+
+release:
+  draft: false
+  prerelease: auto
