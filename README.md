@@ -10,10 +10,11 @@ folder before a `PushSecret` can see it
 ([external-secrets#6873](https://github.com/external-secrets/external-secrets/issues/6873)).
 This fills that gap.
 
-**Status: v0.1.0, the first tagged release.** It has been mirroring one real
-pair of instances in `apply` mode since 2026-09-20, and that is the whole of
-its production record. The config surface may still change before 1.0. Start
-with `plan`, then `dryRun: true`, then widen.
+**Status: v0.2.0.** It has been mirroring one real pair of instances in `apply`
+mode since 2026-09-20, and that is the whole of its production record. The
+webhook trigger is new in v0.2.0 and has no production record yet. The config
+surface may still change before 1.0. Start with `plan`, then `dryRun: true`,
+then widen.
 
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -32,7 +33,7 @@ Binaries and checksums are attached to each
 darwin on amd64 and arm64:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 curl -fsSL -o infisical-mirror.tar.gz \
   "https://github.com/alekc/infisical-mirror/releases/download/v${VERSION}/infisical-mirror_${VERSION}_linux_amd64.tar.gz"
 tar -xzf infisical-mirror.tar.gz infisical-mirror
@@ -42,14 +43,14 @@ install -m 0755 infisical-mirror /usr/local/bin/
 Container image, `linux/amd64` and `linux/arm64`:
 
 ```sh
-docker pull ghcr.io/alekc/infisical-mirror:0.1.0
+docker pull ghcr.io/alekc/infisical-mirror:0.2.0
 ```
 
 Debian and Ubuntu, from the `.deb` attached to each release (amd64 and arm64,
 from v0.1.1 onward):
 
 ```sh
-VERSION=0.1.1
+VERSION=0.2.0
 curl -fsSLO "https://github.com/alekc/infisical-mirror/releases/download/v${VERSION}/infisical-mirror_${VERSION}_linux_amd64.deb"
 sudo dpkg -i "infisical-mirror_${VERSION}_linux_amd64.deb"
 ```
@@ -472,7 +473,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: mirror
-              image: ghcr.io/alekc/infisical-mirror:0.1.0
+              image: ghcr.io/alekc/infisical-mirror:0.2.0
               args: [apply, --config, /etc/infisical-mirror/config.yaml]
               envFrom:
                 - secretRef:
