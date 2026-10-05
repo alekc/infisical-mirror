@@ -46,6 +46,9 @@ func TestNoSecretMaterialReachesALabel(t *testing.T) {
 	})
 	r.ObserveApply(id, map[string]int{"create": 36}, 0)
 	r.EndPass("apply", time.Now(), true)
+	r.ObservePassStarted("webhook")
+	r.ObserveWebhook("cloud", "accepted")
+	r.ObserveWebhook("", "unknown_source")
 
 	body := render(t, r)
 
@@ -67,6 +70,7 @@ func TestNoSecretMaterialReachesALabel(t *testing.T) {
 		"rule": true, "env_a": true, "env_b": true, "op": true, "side": true,
 		"command": true, "result": true,
 		"version": true, "commit": true, "date": true,
+		"trigger": true, "source": true, "outcome": true,
 	}
 	for _, name := range labelNames(body) {
 		if !allowed[name] {

@@ -23,6 +23,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateState()...)
 	errs = append(errs, c.validateDaemon()...)
 	errs = append(errs, c.validateMetrics()...)
+	errs = append(errs, c.validateWebhook()...)
 	errs = append(errs, c.validateDefaults()...)
 	errs = append(errs, c.validateRules()...)
 
@@ -161,6 +162,60 @@ func (c *Config) validateMetrics() []error {
 		}
 	}
 	return errs
+}
+
+// validateWebhook refuses a receiver that is only half configured: a listener
+// no instance can sign for, or a secret with nowhere to arrive. Runs after
+// validateDaemon and validateMetrics, whose defaults it compares against.
+func (c *Config) validateWebhook() []error {
+	var errs []error
+	w := &c.Webhook
+
+	var signed []string
+	for _, name := range sortedKeys(c.Instances) {
+		env := c.Instances[name].WebhookSecretEnv
+		if env == "" {
+			continue
+		}
+		signed = append(signed, name)
+		if !envVarName.MatchString(env) {
+			errs = append(errs, fmt.Errorf("instances.%s.webhookSecretEnv: %q is not an environment variable name; name the variable holding the secret, do not put the secret here", name, env))
+		}
+		if !w.Enabled() {
+			errs = append(errs, fmt.Errorf("instances.%s.webhookSecretEnv: set, but webhook.listen is empty, so nothing would receive the webhook", name))
+		}
+	}
+
+	if w.Debounce == 0 {
+		w.Debounce = Duration(DefaultWebhookDebounce)
+	}
+	if d := w.Debounce.Duration(); d < MinWebhookDebounce || d > c.Daemon.Interval.Duration() {
+		errs = append(errs, fmt.Errorf("webhook.debounce: %s must be between %s and daemon.interval (%s)",
+			d, MinWebhookDebounce, c.Daemon.Interval))
+	}
+
+	if !w.Enabled() {
+		return errs
+	}
+	if len(signed) == 0 {
+		errs = append(errs, errors.New("webhook.listen: set, but no instance has a webhookSecretEnv, so every request would be refused"))
+	}
+	host, port, err := net.SplitHostPort(w.Listen)
+	if err != nil {
+		return append(errs, fmt.Errorf("webhook.listen: %q is not a host:port address such as :9091: %w", w.Listen, err))
+	}
+	if mHost, mPort, err := net.SplitHostPort(c.Metrics.Listen); err == nil && port == mPort &&
+		(host == mHost || isWildcard(host) || isWildcard(mHost)) {
+		errs = append(errs, fmt.Errorf("webhook.listen: %q collides with metrics.listen %q; the webhook gets its own port so /metrics need not be exposed with it",
+			w.Listen, c.Metrics.Listen))
+	}
+	return errs
+}
+
+// isWildcard reports whether a listen host binds every interface.
+func isWildcard(host string) bool {
+	ip := net.ParseIP(host)
+	return host == "" || (ip != nil && ip.IsUnspecified())
 }
 
 // envVarName is the portable shape of an environment variable name. A salt

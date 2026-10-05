@@ -37,6 +37,11 @@ metrics:
   # only: widen it deliberately, the endpoint is unauthenticated.
   listen: 127.0.0.1:9090
 
+# Off by default. The README's Webhook section has the instance side of it.
+# webhook:
+#   listen: :9091
+#   debounce: 10s
+
 defaults:
   # The package default is to report, never write. Watch a few passes, confirm
   # the plan is what you expect, then set this to false. `plan` is available

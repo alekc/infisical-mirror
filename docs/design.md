@@ -12,6 +12,7 @@ this file holds the reasoning that is too long to sit above a function.
 - [Path handling](#path-handling)
 - [Normalisation](#normalisation)
 - [Talking to the API](#talking-to-the-api)
+- [The webhook trigger](#the-webhook-trigger)
 - [Keeping secrets out of output](#keeping-secrets-out-of-output)
 
 ## Shape of a run
@@ -344,6 +345,75 @@ something to work around. It can never satisfy the cache check, so every
 subsequent request would log in again: a silent storm against that same endpoint.
 The likely causes are a field that moved and a unit that is not seconds, and both
 are worth stopping for.
+
+## The webhook trigger
+
+A webhook only ever changes *when* a pass runs, never what it does. The pass
+it starts is the same function the timer starts, over every rule, so nothing a
+caller sends can narrow, widen or steer a reconcile.
+
+### Verifying a request
+
+Infisical signs with HMAC-SHA256 over `JSON.stringify(payload)` and sends
+`x-infisical-signature: t=<unix ms>;<hex>`, with the same timestamp as a field
+inside the payload (`triggerWebhookRequest` in
+`backend/src/services/webhook/webhook-fns.ts`). Three consequences:
+
+- The hash is taken over the raw bytes received, never over a re-encoding.
+  Go's encoder escapes `<`, `>` and `&` and sorts map keys, so a decode and
+  re-encode changes the bytes of, say, any project name with an ampersand. The
+  test fixture's body and signature were produced outside Go for that reason.
+- The header's `t=` is not covered by the signature; the body's `timestamp` is.
+  The two must match, and the signed one is what the five-minute skew check
+  reads. That window is how long a captured request can be replayed. A replay
+  cannot change what a pass does, only how often passes run: replayed in a
+  loop, it keeps them back to back, one per pass duration plus debounce, for up
+  to five minutes. There is no nonce cache; the debounce is the rate limit.
+- The header grammar is accepted exactly and nothing looser: lowercase hex, no
+  `v1=`, no extra fields. Infisical's own PKI alerts use a different,
+  Stripe-style header, and a lenient parser is how a second format starts being
+  accepted by accident.
+
+The handler answers every request with a bare status code and no body; only
+the mux's own 404 and 405, for paths and methods outside the one route, carry
+Go's default text. An unknown instance gets 404 and a known one with a bad
+signature 401, which tells a caller which names exist; instance names are
+not secret, and the distinction is what makes a misconfigured URL
+diagnosable. `changedBy` is never decoded,
+because for a user it is an email address.
+
+### Scheduling
+
+The loop is one goroutine and runs passes inline, so overlap is impossible by
+construction rather than prevented by a lock. Events reach it through a
+channel of capacity one written without blocking, which collapses any number
+of events into one pending trigger, and an event that arrives mid-pass waits
+there and produces exactly one follow-up.
+
+A trigger only moves the next pass *earlier*, to `now + debounce`, and never
+later. A sliding debounce, where each event restarts the wait, would let a
+steady stream of edits postpone the pass indefinitely. With this rule a stream
+produces one pass per `pass duration + debounce` at most, and
+`TestSchedulerSteadyStreamDoesNotStarve` fails against the sliding version.
+
+The timer is not replaced. Infisical's request client retries a delivery up
+to three times on a 429, a 5xx or a network error (axios-retry in
+`backend/src/lib/config/request.ts`), and never on any other 4xx or on a
+timeout; after that the failure is recorded and dropped. A retry carries the
+same bytes and timestamp, so it verifies and coalesces like any duplicate. An
+event that is lost anyway is caught by the next interval and nothing else.
+
+### What is not done
+
+The event names a project, environment and folder, so a pass could be limited
+to the rules that match. It is not: a pass over one folder would feed the
+change ratio guard that folder's keys as its denominator, so a bulk edit the
+guard allows across a whole rule could be refused in a small folder, and the
+delete and empty-side guards would need the same re-examination against a
+partial listing. Echoes are not filtered either. The mirror's own
+writes make the other side send an event, and the only way to recognise one is
+`changedBy`, which is a display name rather than an id. The cost is one pass
+that writes nothing, which sends nothing, so the chain stops there.
 
 ## Keeping secrets out of output
 

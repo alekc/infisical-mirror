@@ -12,6 +12,9 @@ instances:
       universalAuth:
         clientIdEnv: CLOUD_CLIENT_ID
         clientSecretEnv: CLOUD_CLIENT_SECRET
+    # Optional, together with webhook.listen below. Names the variable with
+    # this instance's webhook secret key; served at /webhook/cloud.
+    # webhookSecretEnv: CLOUD_WEBHOOK_SECRET
 
   selfhosted:
     url: https://secret.example.com
@@ -54,6 +57,11 @@ metrics:
   # all. Must be absolute and end in .prom: the collector reads only *.prom,
   # and silently ignores anything else in the directory.
   textfile: /var/lib/node_exporter/textfile/infisical-mirror.prom
+
+# Daemon only, off unless listen is set; see the README's Webhook section.
+# webhook:
+#   listen: :9091
+#   debounce: 10s
 
 # Applied to any rule that does not set the same field.
 defaults:
