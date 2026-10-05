@@ -7,7 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"runtime"
+	"runtime/debug"
+	"strings"
 )
 
 // Exit codes. They are part of the interface: a CronJob running `plan
@@ -28,15 +31,91 @@ const (
 	ExitUsage = 64
 )
 
-// Build metadata, set at link time with -ldflags -X. The defaults are what a
-// `go build` with no flags produces, and they are deliberately obvious: a
-// binary reporting "dev" is one nobody can trace back to a commit, which is
-// worth knowing when it is the thing writing to production secrets.
+// Build metadata, set at link time with -ldflags -X, and otherwise recovered
+// from the embedded build info by init below. The defaults survive only when
+// neither route has anything: a binary reporting "dev" is one nobody can trace
+// back to a commit, which matters when it is what writes to production secrets.
 var (
 	Version   = "dev"
 	Commit    = "none"
 	BuildDate = "unknown"
 )
+
+func init() {
+	bi, ok := debug.ReadBuildInfo()
+	Version, Commit, BuildDate = resolveBuild(Version, Commit, BuildDate, bi, ok)
+}
+
+// resolveBuild fills in whichever of the three are still at their default from
+// the embedded build info, taking them as arguments so the precedence is
+// testable. The two sources are complementary: a proxy install carries
+// Main.Version and no vcs.* at all, a checkout build carries vcs.* and no tag.
+func resolveBuild(version, commit, date string, bi *debug.BuildInfo, ok bool) (string, string, string) {
+	if !ok || bi == nil {
+		return version, commit, date
+	}
+
+	// Trim the "v": goreleaser's .Version has no prefix, and the two routes
+	// reporting 0.1.1 and v0.1.1 for one build would be a needless difference.
+	if version == "dev" && isReleaseVersion(bi.Main.Version) {
+		version = strings.TrimPrefix(bi.Main.Version, "v")
+	}
+
+	var modified bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if commit == "none" && s.Value != "" {
+				commit = shortCommit(s.Value)
+			}
+		case "vcs.time":
+			if date == "unknown" && s.Value != "" {
+				date = s.Value
+			}
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+
+	// A binary built from a dirty tree is not the commit it names, and saying
+	// so is the whole point of reporting a commit at all. Deliberately applied
+	// to a linked commit too: `make build` on a modified tree sets one through
+	// ldflags, and its VERSION already carries git describe --dirty.
+	if modified && commit != "none" && !strings.HasSuffix(commit, "-dirty") {
+		commit += "-dirty"
+	}
+
+	return version, commit, date
+}
+
+// pseudoVersion matches the "<14 digit timestamp>-<12 hex>" tail every
+// pseudo-version ends with. The leading class is both separators Go uses: a
+// hyphen with no base tag ("v0.0.0-2026...") and a dot with one
+// ("v0.1.2-0.2026..."). One regexp beats a golang.org/x/mod dependency here.
+var pseudoVersion = regexp.MustCompile(`[-.][0-9]{14}-[0-9a-f]{12}(\+[0-9a-z.]+)?$`)
+
+// isReleaseVersion reports whether v is a version someone could go and fetch,
+// as opposed to the toolchain's stand-in for an untagged or dirty build. A
+// checkout build yields "0.1.2-0.20260920170255-3e60addac030+dirty", naming a
+// release that does not exist, and that is worse than reporting "dev".
+func isReleaseVersion(v string) bool {
+	if v == "" || v == "(devel)" {
+		return false
+	}
+	// "+dirty" is appended to a real tag too when the tree is modified, so the
+	// build metadata has to be rejected separately from the pseudo-version.
+	return !strings.Contains(v, "+") && !pseudoVersion.MatchString(v)
+}
+
+// shortCommit matches the width of goreleaser's .ShortCommit, so that the
+// linked and the recovered paths print a commit of the same shape.
+func shortCommit(rev string) string {
+	const width = 7
+	if len(rev) <= width {
+		return rev
+	}
+	return rev[:width]
+}
 
 // versionLine is what both `version` and `--version` print. One function, so
 // the two can never drift into reporting different things.
