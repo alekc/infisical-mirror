@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/alekc/infisical-mirror/internal/config"
 	"github.com/alekc/infisical-mirror/internal/metrics"
 	"github.com/alekc/infisical-mirror/internal/reconcile"
+	"github.com/alekc/infisical-mirror/internal/webhook"
 )
 
 // pass is one complete sweep over every selected rule. It returns the exit code
@@ -38,58 +41,167 @@ func serve(ctx context.Context, cfg *config.Config, command string, daemon bool,
 	}
 
 	interval := cfg.Daemon.Interval.Duration()
-	srv := &http.Server{
+	servers := []namedServer{{"metrics endpoint", &http.Server{
 		Addr:              cfg.Metrics.Listen,
 		Handler:           metricsMux(reg),
 		ReadHeaderTimeout: 10 * time.Second,
+	}}}
+
+	// Nil unless the webhook is on, and a nil channel never fires in a select,
+	// so without a webhook the loop below is the timer alone.
+	var trigger chan struct{}
+	if cfg.Webhook.Enabled() {
+		secrets, err := webhookSecrets(cfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", command, err)
+			return ExitError
+		}
+		// One slot, filled without blocking: any number of events between two
+		// passes collapse into the one pending trigger.
+		trigger = make(chan struct{}, 1)
+		h := &webhook.Handler{
+			Secrets: secrets,
+			Trigger: func() {
+				select {
+				case trigger <- struct{}{}:
+				default:
+				}
+			},
+			Observe: reg.ObserveWebhook,
+		}
+		servers = append(servers, namedServer{"webhook receiver", &http.Server{
+			Addr:              cfg.Webhook.Listen,
+			Handler:           h.Mux(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       time.Minute,
+			MaxHeaderBytes:    16 << 10,
+		}})
 	}
 
-	// Buffered so the goroutine can exit even if nothing ever reads this, which
+	// Buffered so a goroutine can exit even if nothing ever reads this, which
 	// is the normal case: a listener that comes up successfully never sends.
-	serveErr := make(chan error, 1)
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- err
-			return
+	serveErr := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() {
+			if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serveErr <- fmt.Errorf("%s: %w", s.name, err)
+			}
+		}()
+	}
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		for _, s := range servers {
+			_ = s.srv.Shutdown(shutdown)
 		}
-		serveErr <- nil
 	}()
-	fmt.Fprintf(stdout, "%s: serving metrics on %s, reconciling every %s\n", command, cfg.Metrics.Listen, interval)
 
+	if trigger != nil {
+		fmt.Fprintf(stdout, "%s: serving metrics on %s, webhooks on %s, reconciling every %s\n",
+			command, cfg.Metrics.Listen, cfg.Webhook.Listen, interval)
+	} else {
+		fmt.Fprintf(stdout, "%s: serving metrics on %s, reconciling every %s\n", command, cfg.Metrics.Listen, interval)
+	}
+
+	l := loop{
+		interval: interval,
+		debounce: cfg.Webhook.Debounce.Duration(),
+		trigger:  trigger,
+		serveErr: serveErr,
+		run:      run,
+		started:  reg.ObservePassStarted,
+	}
+	exit, err := l.until(ctx)
+	if err != nil {
+		// A listener that never came up is the whole reason to be a daemon
+		// rather than a CronJob, so this is fatal rather than carried on past.
+		fmt.Fprintf(stderr, "%s: %v\n", command, err)
+		return ExitError
+	}
+	fmt.Fprintf(stdout, "%s: stopping\n", command)
+	return exit
+}
+
+type namedServer struct {
+	name string
+	srv  *http.Server
+}
+
+// loop schedules a daemon's passes. Passes run inline in its one goroutine,
+// so two can never overlap, and a trigger that lands mid-pass waits in its
+// channel and yields exactly one follow-up. See docs/design.md.
+type loop struct {
+	interval time.Duration
+	debounce time.Duration
+	trigger  <-chan struct{}
+	serveErr <-chan error
+	run      pass
+	started  func(trigger string)
+}
+
+// until runs passes until ctx is done, returning the last pass's exit code,
+// or until a listener fails, returning its error.
+func (l *loop) until(ctx context.Context) (int, error) {
 	exit := ExitOK
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	// next is when the timer fires, which time.Timer does not expose.
+	next := time.Now()
+	byWebhook := false
 
 	for {
 		select {
 		case <-ctx.Done():
 			// The pass in flight, if any, has already returned: this select is
 			// only reached between passes.
-			shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdown)
-			fmt.Fprintf(stdout, "%s: stopping\n", command)
-			return exit
-		case err := <-serveErr:
-			if err != nil {
-				// A metrics endpoint that never came up is the whole reason to
-				// be a daemon rather than a CronJob, so this is fatal rather
-				// than something to carry on without.
-				fmt.Fprintf(stderr, "%s: metrics endpoint: %v\n", command, err)
-				return ExitError
+			return exit, nil
+		case err := <-l.serveErr:
+			return ExitError, err
+		case <-l.trigger:
+			// Only ever brings the next pass forward. A later event never
+			// pushes a scheduled one back, so a steady stream cannot starve it.
+			if due := time.Now().Add(l.debounce); due.Before(next) {
+				timer.Reset(l.debounce)
+				next, byWebhook = due, true
 			}
 		case <-timer.C:
+			if l.started != nil {
+				trigger := "timer"
+				if byWebhook {
+					trigger = "webhook"
+				}
+				l.started(trigger)
+			}
 			// Whatever the pass returns is reported and recorded, but it does
 			// not stop the loop: drift is the ordinary state of a mirror
 			// between passes, and an instance that is briefly unreachable is
 			// not a reason to take the metrics endpoint down with it.
-			exit = run(ctx)
-			// Measured from the end of the pass rather than on a fixed tick, so
-			// a pass that runs longer than the interval delays the next one
-			// instead of queueing a second one behind it.
-			timer.Reset(interval)
+			exit = l.run(ctx)
+			// Measured from the end of the pass, so a pass that runs longer
+			// than the interval delays the next one instead of queueing one.
+			timer.Reset(l.interval)
+			next, byWebhook = time.Now().Add(l.interval), false
 		}
 	}
+}
+
+// webhookSecrets reads each instance's webhook secret from the environment.
+// An empty one is an error: it would refuse every request from that side.
+func webhookSecrets(cfg *config.Config) (map[string][]byte, error) {
+	secrets := make(map[string][]byte)
+	for name, inst := range cfg.Instances {
+		if inst.WebhookSecretEnv == "" {
+			continue
+		}
+		v := strings.TrimSpace(os.Getenv(inst.WebhookSecretEnv))
+		if v == "" {
+			return nil, fmt.Errorf("instances.%s.webhookSecretEnv: %s is unset or empty", name, inst.WebhookSecretEnv)
+		}
+		secrets[name] = []byte(v)
+	}
+	return secrets, nil
 }
 
 // metricsMux is the daemon's HTTP surface: the endpoint and a liveness probe,

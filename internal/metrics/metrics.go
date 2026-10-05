@@ -1,7 +1,7 @@
 // Package metrics reports what a run did, to whichever sink the mode has: an
 // endpoint for a daemon, a textfile for a one-shot run. Both render the same
-// collectors. No secret value, key or path is ever a label; the rule name
-// and two environments are the whole vocabulary. See docs/design.md.
+// collectors. No secret value, key or path is ever a label; rule names,
+// environments and instance names are the whole vocabulary. See docs/design.md.
 package metrics
 
 import (
@@ -43,6 +43,9 @@ type Registry struct {
 	ruleErrors    *prometheus.GaugeVec
 
 	appliedTotal *prometheus.CounterVec
+
+	passesStarted   *prometheus.CounterVec
+	webhookRequests *prometheus.CounterVec
 }
 
 // New builds a registry. The collectors go on a private registry rather than
@@ -80,7 +83,24 @@ func New() *Registry {
 
 	r.appliedTotal = counter("applied_total", "Writes that reached an instance, by operation.", append(ruleLabels, "op")...)
 
+	r.passesStarted = counter("passes_started_total", "Daemon passes started, by what scheduled them: timer or webhook.", "trigger")
+	// "source", not "instance": Prometheus sets instance on every scraped
+	// series and would rename this one to exported_instance.
+	r.webhookRequests = counter("webhook_requests_total",
+		"Webhook requests, by the configured instance they named and what became of them.", "source", "outcome")
+
 	return r
+}
+
+// ObservePassStarted counts a daemon pass by what scheduled it.
+func (r *Registry) ObservePassStarted(trigger string) {
+	r.passesStarted.WithLabelValues(trigger).Inc()
+}
+
+// ObserveWebhook counts one webhook request. Source is a configured instance
+// name or empty, never the raw path a caller sent.
+func (r *Registry) ObserveWebhook(source, outcome string) {
+	r.webhookRequests.WithLabelValues(source, outcome).Inc()
 }
 
 // SetBuildInfo records the build this process came from.

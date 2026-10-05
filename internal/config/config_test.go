@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // base is a minimal valid document. Tests build on it rather than repeating it,
@@ -702,6 +703,65 @@ func TestDaemonAndMetricsDefaults(t *testing.T) {
 	// than no file, because it looks like reporting.
 	if got := cfg.Metrics.Textfile; got != "" {
 		t.Errorf("metrics.textfile = %q, want it unset unless asked for", got)
+	}
+}
+
+// signedBase is base with a webhook secret on the cloud instance.
+var signedBase = strings.Replace(base, "        clientSecretEnv: CLOUD_CLIENT_SECRET\n",
+	"        clientSecretEnv: CLOUD_CLIENT_SECRET\n    webhookSecretEnv: CLOUD_WEBHOOK_SECRET\n", 1)
+
+func TestWebhookIsOffByDefault(t *testing.T) {
+	cfg := mustParse(t, base)
+	if cfg.Webhook.Enabled() {
+		t.Error("the webhook receiver is on without being asked for")
+	}
+	if got := cfg.Webhook.Debounce.Duration(); got != DefaultWebhookDebounce {
+		t.Errorf("webhook.debounce = %s, want %s", got, DefaultWebhookDebounce)
+	}
+}
+
+func TestWebhookAcceptsAFullConfig(t *testing.T) {
+	cfg := mustParse(t, signedBase+"webhook:\n  listen: \":9091\"\n  debounce: 3s\n")
+	if !cfg.Webhook.Enabled() || cfg.Webhook.Debounce.Duration() != 3*time.Second {
+		t.Errorf("webhook = %+v, want on with a 3s debounce", cfg.Webhook)
+	}
+	if got := cfg.Instances["cloud"].WebhookSecretEnv; got != "CLOUD_WEBHOOK_SECRET" {
+		t.Errorf("instances.cloud.webhookSecretEnv = %q", got)
+	}
+}
+
+func TestWebhookRejectsAHalfConfig(t *testing.T) {
+	for _, tc := range []struct{ name, doc, want string }{
+		{"listener nobody can sign for", base + "webhook:\n  listen: \":9091\"\n", "no instance has a webhookSecretEnv"},
+		{"secret with no listener", signedBase, "webhook.listen is empty"},
+		{"same address as metrics", signedBase + "webhook:\n  listen: \":9090\"\n", "collides with metrics.listen"},
+		{"wildcard against a specific host", signedBase + "metrics:\n  listen: \"127.0.0.1:9090\"\nwebhook:\n  listen: \":9090\"\n", "collides"},
+		{"not an address", signedBase + "webhook:\n  listen: \"9091\"\n", "not a host:port"},
+		{"secret pasted in place of a name", strings.Replace(signedBase, "CLOUD_WEBHOOK_SECRET", "s3cret value!", 1) +
+			"webhook:\n  listen: \":9091\"\n", "not an environment variable name"},
+		{"debounce below the floor", signedBase + "webhook:\n  listen: \":9091\"\n  debounce: 100ms\n", "webhook.debounce"},
+		{"debounce above the interval", signedBase + "daemon:\n  interval: 1m\nwebhook:\n  listen: \":9091\"\n  debounce: 2m\n", "webhook.debounce"},
+		{"bare-number debounce", signedBase + "webhook:\n  listen: \":9091\"\n  debounce: 10\n", "needs a unit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parse(t, tc.doc)
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+
+	// Different ports, or the same port on two specific hosts, do not collide.
+	for _, doc := range []string{
+		signedBase + "webhook:\n  listen: \":9091\"\n",
+		signedBase + "metrics:\n  listen: \"127.0.0.1:9090\"\nwebhook:\n  listen: \"10.0.0.1:9090\"\n",
+	} {
+		if _, err := parse(t, doc); err != nil {
+			t.Errorf("rejected a valid webhook config: %v", err)
+		}
 	}
 }
 

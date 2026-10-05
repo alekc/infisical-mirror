@@ -396,6 +396,58 @@ directory and renamed over the target: a collector scrapes the whole directory,
 so a half-written or leftover file becomes a second, stale copy of every series
 rather than being skipped.
 
+### Webhook
+
+A daemon waits up to `daemon.interval` to notice a change. With a webhook
+receiver it starts a pass a few seconds after Infisical reports one instead:
+
+```yaml
+instances:
+  cloud:
+    url: https://app.infisical.com
+    auth: { ... }
+    # Names the variable holding the secret key of this instance's webhooks.
+    webhookSecretEnv: CLOUD_WEBHOOK_SECRET
+
+webhook:
+  listen: :9091 # off unless set; its own port, so /metrics stays internal
+  debounce: 10s # default 10s, minimum 1s, at most daemon.interval
+```
+
+Each instance with a `webhookSecretEnv` gets the route
+`POST /webhook/<instance name>` on `webhook.listen`. In that instance, under
+Project Settings > Webhooks, add a webhook of type General pointing at it, set
+its secret key to the value of the named variable, filter it to the Secret
+Modified event, and scope it to the environments and paths your rules cover.
+The Test button should get a 200 back; it is checked like a real event and
+starts nothing.
+
+What the receiver does with a request:
+
+- Anything without a valid `x-infisical-signature` gets a 401, and so does a
+  signed event whose timestamp is more than five minutes from the local clock.
+- A `secrets.modified` event schedules a pass `debounce` after it arrives. More
+  events before then join the same pass, events during a pass give exactly one
+  more after it, and two passes never run at once.
+- The event names a folder, not a secret, so the pass is the ordinary full
+  pass: every rule is listed, and only what differs is written.
+- The interval keeps running. Infisical retries a delivery a few times on a
+  5xx or a network error and then gives up, so the timer is what catches a
+  missed one.
+
+Two things to know before relying on it. Infisical will not post to a private
+or internal address unless the sending instance sets
+`ALLOW_INTERNAL_IP_CONNECTIONS`, so Infisical Cloud needs a URL it can reach
+from the internet. And the mirror's own writes are changes too: a pass that
+writes to one side makes that side send an event, which costs one extra pass
+that finds nothing to do.
+
+The config is refused when only half of it is there: a listener with no
+instance holding a secret, a `webhookSecretEnv` with no listener, or a listener
+on the metrics address. A named variable that is empty stops the daemon at
+startup. A one-shot run validates the block, since one config serves both
+modes, but starts no receiver, having no process left to receive anything.
+
 ## Deploying it
 
 Three shapes, one binary.
@@ -560,6 +612,15 @@ folder path, ever.
 | `rule_failed_actions` | gauge | |
 | `rule_errors` | gauge | |
 | `applied_total` | counter | `op` |
+| `passes_started_total` | counter | `trigger` (`timer` or `webhook`), daemon only |
+| `webhook_requests_total` | counter | `source`, `outcome` |
+
+`webhook_requests_total` labels a request with the configured instance it
+named, or an empty `source` when it named none, so a caller cannot create series
+by inventing paths. The label is `source` rather than `instance` because
+Prometheus already sets `instance` on every scraped series. A rising
+`bad_signature` or `stale` count is a secret or a clock that disagrees with
+Infisical.
 
 The per-rule gauges are cleared at the start of every pass, so a rule dropped
 from the config stops reporting rather than holding its last values forever; a

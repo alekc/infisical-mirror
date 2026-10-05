@@ -71,6 +71,12 @@ const (
 	// config does not say. It listens on all interfaces because the only
 	// deployment target is a container whose network namespace is the boundary.
 	DefaultMetricsListen = ":9090"
+
+	// DefaultWebhookDebounce is how long a webhook-triggered pass waits after
+	// the first event, so a burst of edits is one pass rather than one each.
+	DefaultWebhookDebounce = 10 * time.Second
+	// MinWebhookDebounce keeps a stream of events from becoming a hot loop.
+	MinWebhookDebounce = time.Second
 )
 
 // Config is the whole YAML document.
@@ -79,6 +85,7 @@ type Config struct {
 	State     State               `yaml:"state"`
 	Daemon    Daemon              `yaml:"daemon"`
 	Metrics   Metrics             `yaml:"metrics"`
+	Webhook   Webhook             `yaml:"webhook"`
 	Defaults  Defaults            `yaml:"defaults"`
 	Rules     []Rule              `yaml:"rules"`
 }
@@ -138,10 +145,26 @@ type Metrics struct {
 	Textfile string `yaml:"textfile"`
 }
 
+// Webhook configures the daemon's receiver for Infisical's secrets.modified
+// webhook, which starts a pass early instead of waiting for the interval.
+type Webhook struct {
+	// Listen is the receiver's address. Empty, the default, turns it off. It
+	// is a separate port from metrics so only this one needs exposing.
+	Listen string `yaml:"listen"`
+	// Debounce is the delay between the first event and the pass it starts.
+	Debounce Duration `yaml:"debounce"`
+}
+
+// Enabled reports whether the daemon should run the receiver.
+func (w Webhook) Enabled() bool { return w.Listen != "" }
+
 // Instance is one Infisical deployment, cloud or self-hosted.
 type Instance struct {
 	URL  string `yaml:"url"`
 	Auth Auth   `yaml:"auth"`
+	// WebhookSecretEnv names the variable holding the secret key set on this
+	// instance's webhooks. Unset, the instance has no webhook route.
+	WebhookSecretEnv string `yaml:"webhookSecretEnv"`
 }
 
 // Auth holds exactly one authentication method. Both name environment
