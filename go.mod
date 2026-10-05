@@ -3,7 +3,7 @@ module github.com/alekc/infisical-mirror
 go 1.27.1
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/bmatcuk/doublestar/v4 v4.10.2
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/common v0.71.0
 	gopkg.in/yaml.v3 v3.0.1
