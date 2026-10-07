@@ -420,8 +420,9 @@ Each instance with a `webhookSecretEnv` gets the route
 Project Settings > Webhooks, add a webhook of type General pointing at it, set
 its secret key to the value of the named variable, filter it to the Secret
 Modified event, and scope it to the environments and paths your rules cover.
-The Test button should get a 200 back; it is checked like a real event and
-starts nothing.
+The secret path is a glob, and `/` matches only the root folder, whatever the
+form's hint says: use `/**` to cover every folder. The Test button should get
+a 200 back; it is checked like a real event and starts nothing.
 
 What the receiver does with a request:
 
